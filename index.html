@@ -104,6 +104,9 @@
   .labels-off .pad:not(.chord) .lbl { visibility: hidden; }
 
   /* ---- Readout ---- */
+  .volume { width: 100%; accent-color: var(--accent); height: 32px; }
+  .readout { cursor: pointer; transition: transform .06s ease-out; }
+  .readout:active { transform: scale(.98); }
   .readout {
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
     padding: 7px 12px; text-align: center; min-height: 58px;
@@ -211,7 +214,7 @@
   </header>
   <div id="notice" class="notice" hidden></div>
   <main id="grid" aria-label="Pad grid"></main>
-  <section id="readout" class="readout" aria-live="polite"></section>
+  <section id="readout" class="readout" aria-live="polite" role="button" tabindex="0" aria-label="Play chord"></section>
   <div id="missing" class="missing" role="alert" hidden>
     <span id="missingText"></span>
     <button id="toChromatic">Show in Chromatic</button>
@@ -227,7 +230,7 @@
 
 <div id="sheet" class="backdrop" hidden>
   <div class="sheet" role="dialog" aria-label="Settings">
-    <h2>Push settings</h2>
+    <h2>Settings</h2>
     <div class="field"><span>Layout</span>
       <div class="seg" role="radiogroup">
         <button role="radio" data-set="layout" data-val="4ths">4ths</button>
@@ -259,6 +262,15 @@
         <button role="radio" data-set="labels" data-val="all">All pads</button>
         <button role="radio" data-set="labels" data-val="chord">Chord notes only</button>
       </div>
+    </div>
+    <div class="field"><span>Chord playback</span>
+      <div class="seg" role="radiogroup">
+        <button role="radio" data-set="strum" data-val="true">Strum</button>
+        <button role="radio" data-set="strum" data-val="false">All at once</button>
+      </div>
+    </div>
+    <div class="field"><span>Volume</span>
+      <input id="volume" class="volume" type="range" min="0" max="1" step="0.05" aria-label="Volume">
     </div>
     <button id="sheetDone" class="done">Done</button>
   </div>
@@ -699,7 +711,25 @@ const Music = (() => {
     };
   }
 
+  /**
+   * MIDI notes to sound for a chord: the full chord (missing notes included),
+   * at the octave of the lit shape. With no shape on the grid, the bass goes
+   * in the settings octave.
+   */
+  function chordMidi(chord, s, placement, grid) {
+    const pitches = chordPitches(chord, s);
+    if (placement && placement.primary) {
+      const gone = new Set(placement.missing.map(m => m.pc));
+      const lowestPlayable = pitches.find(p => !gone.has(mod(p, 12)));
+      const offset = grid[placement.primary.pads[0]].midi - lowestPlayable;
+      return pitches.map(p => p + offset);
+    }
+    const offset = 12 * (s.octave + 2) - 12 * Math.floor(pitches[0] / 12);
+    return pitches.map(p => p + offset);
+  }
+
   return {
+    chordMidi,
     BORROWED, scaleFamily, borrowedFor, borrowedChords, missingNotes, missingMessage, placeChord,
     KEYS, SCALES, LAYOUTS, DEFAULT_SETTINGS, OCTAVE_MIN, OCTAVE_MAX, CHORD_TYPES,
     keyByName, scaleByName, normaliseSettings, usesFlats, noteName, midiName, midiOctave,
@@ -730,6 +760,104 @@ const Store = (() => {
 /* =====================================================================
    TESTS – open index.html?test
    ===================================================================== */
+/* =====================================================================
+   SYNTH – Web Audio. Two detuned saws into a lowpass, ADSR per voice:
+   A 5 ms, D 300 ms, S 0.6, R 600 ms. The AudioContext is created on the
+   first user gesture (browsers block audio until then).
+   ===================================================================== */
+const Synth = (() => {
+  const A = 0.005, D = 0.3, S = 0.6, R = 0.6;
+  const PEAK = 0.22, DETUNE_CENTS = 7, CUTOFF_HZ = 2600;
+  let ctx = null, master = null, volume = 0.7;
+  const live = new Set();
+
+  const level = v => v * v;   // a gentler curve for the slider
+  const freq = midi => 440 * Math.pow(2, (midi - 69) / 12);
+
+  function ensure() {
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      // iOS 17+: play even with the ring/silent switch on silent.
+      try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+      ctx = new AC({ latencyHint: 'interactive' });
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -10; comp.ratio.value = 4;
+      master = ctx.createGain();
+      master.gain.value = level(volume);
+      master.connect(comp).connect(ctx.destination);
+    }
+    if (ctx.state !== 'running') ctx.resume().catch(() => {});
+    return ctx;
+  }
+
+  /** Call from a user gesture. Plays a silent buffer, which older iOS needs. */
+  function unlock() {
+    const c = ensure();
+    if (!c) return;
+    const src = c.createBufferSource();
+    src.buffer = c.createBuffer(1, 1, 22050);
+    src.connect(c.destination);
+    src.start(0);
+  }
+
+  // Envelope level at time t, for browsers without cancelAndHoldAtTime.
+  function levelAt(v, t) {
+    const dt = t - v.start;
+    if (dt <= A) return PEAK * Math.max(0, dt) / A;
+    return PEAK * S + PEAK * (1 - S) * Math.exp(-(dt - A) / (D / 3));
+  }
+
+  function noteOn(midi, delay = 0) {
+    const c = ensure();
+    if (!c) return null;
+    const t = c.currentTime + delay;
+    const env = c.createGain();
+    env.gain.setValueAtTime(0, t);
+    env.gain.linearRampToValueAtTime(PEAK, t + A);
+    env.gain.setTargetAtTime(PEAK * S, t + A, D / 3);
+    const filter = c.createBiquadFilter();
+    filter.type = 'lowpass'; filter.frequency.value = CUTOFF_HZ; filter.Q.value = 0.7;
+    const oscs = [-DETUNE_CENTS, DETUNE_CENTS].map(cents => {
+      const o = c.createOscillator();
+      o.type = 'sawtooth'; o.frequency.value = freq(midi); o.detune.value = cents;
+      o.connect(filter); o.start(t);
+      return o;
+    });
+    filter.connect(env).connect(master);
+    const v = { env, oscs, start: t, released: false };
+    live.add(v);
+    oscs[0].onended = () => { env.disconnect(); live.delete(v); };
+    return v;
+  }
+
+  function noteOff(v, delay = 0) {
+    if (!v || v.released || !ctx) return;
+    v.released = true;
+    const t = Math.max(ctx.currentTime + delay, v.start + A);
+    const g = v.env.gain;
+    if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(t);
+    else { g.cancelScheduledValues(t); g.setValueAtTime(levelAt(v, t), t); }
+    g.setTargetAtTime(0, t, R / 4);
+    v.oscs.forEach(o => o.stop(t + R + 0.1));
+  }
+
+  /** Play notes bass first, optionally strummed ~15 ms apart, held for `hold` seconds. */
+  function playChord(midis, { strum = true, hold = 1.0 } = {}) {
+    midis.forEach((m, i) => {
+      const at = strum ? i * 0.015 : 0;
+      noteOff(noteOn(m, at), at + hold);
+    });
+  }
+
+  function setVolume(v) {
+    volume = v;
+    if (master) master.gain.setTargetAtTime(level(v), ctx.currentTime, 0.02);
+  }
+
+  return { unlock, noteOn, noteOff, playChord, setVolume, get voices() { return live.size; }, get state() { return ctx ? ctx.state : 'none'; } };
+})();
+
 function runTests() {
   const M = Music;
   const results = [];
@@ -1047,6 +1175,30 @@ function runTests() {
     eq(M.placeChord(ch, s, g, other).primary.bass, other, 're-anchored');
   });
 
+  // ---- Stage 4: what the readout plays ----
+  const midiOf = (chord, s, anchor) => { const g = M.buildGrid(s); return M.chordMidi(chord, s, M.placeChord(chord, s, g, anchor), g); };
+
+  test('Readout plays the lit shape: C Major I is C3 E3 G3, C/E is E3 G3 C4', () => {
+    eq(midiOf(C({}), S({})), [60, 64, 67], 'I');
+    eq(midiOf(C({ inversion: 1 }), S({})), [64, 67, 72], 'C/E');
+  });
+
+  test('Readout follows the anchor and the octave setting', () => {
+    const s = S({}), g = M.buildGrid(s);
+    eq(midiOf(C({}), s, g.findIndex(p => p.midi === 72)), [72, 76, 79], 'anchored on C4');
+    eq(midiOf(C({}), S({ octave: 1 })), [36, 40, 43], 'octave 1');
+  });
+
+  test('Readout plays the full chord even when In Key is missing the bass (♭VII → B♭2 D3 F3)', () => {
+    eq(midiOf(B('Minor', 7), S({})), [58, 62, 65], 'In Key');
+    eq(midiOf(B('Minor', 7), S({ mode: 'chromatic' })), [70, 74, 77], 'Chromatic shape starts on B♭3');
+  });
+
+  test('Chord with no shape on the grid still plays at the settings octave', () => {
+    const s = S({ octave: 2 });
+    eq(M.chordMidi(C({ degree: 5 }), s, null, M.buildGrid(s)), [55, 59, 62], 'G2 B2 D3');
+  });
+
   return results;
 }
 
@@ -1074,11 +1226,23 @@ const UI = (() => {
   let shape = null;     // result of placeShape for the current chord
   let lastTap = null;   // { index, note } for the pad info line
 
+  // Settings that move pads around; changing one drops the tapped anchor.
+  const GRID_SETTINGS = new Set(['key', 'scale', 'mode', 'layout', 'orientation', 'fixed', 'octave']);
+  const BOOLEAN_SETTINGS = new Set(['fixed', 'strum']);
+  const heldPads = new Map();   // pointerId → synth voice, for pads held down
+
   function setSetting(name, value) {
     settings = Music.normaliseSettings({ ...settings, [name]: value });
     Store.write('settings', settings);
-    anchor = null;
+    if (name === 'volume') { Synth.setVolume(settings.volume); return; }
+    if (GRID_SETTINGS.has(name)) anchor = null;
     render();
+  }
+
+  function playChord() {
+    if (!chord) return;
+    Synth.unlock();
+    Synth.playChord(Music.chordMidi(chord, settings, shape, grid), { strum: settings.strum });
   }
 
   function setChord(next) {
@@ -1217,6 +1381,7 @@ const UI = (() => {
   function render() {
     $('key').value = settings.key;
     $('scale').value = settings.scale;
+    $('volume').value = settings.volume;
     computeShape();
     renderSegments(); renderSummary(); renderNotice();
     renderGrid(); renderReadout(); renderMissing(); renderPadInfo(); renderDiatonic(); renderBorrowed(); renderTypes();
@@ -1229,15 +1394,23 @@ const UI = (() => {
     setTimeout(() => b.classList.remove('hit'), 140);
   }
 
-  function onPad(i) {
+  function onPad(i, pointerId) {
     const p = grid[i];
     if (!p || !p.valid) return;
     lastTap = i;
-    // Tapping a pad with the bass pitch class anchors the shape there.
-    // Any other pad only plays its note (audio arrives in stage 4).
+    // The note sounds while the pad is held, like the Push.
+    Synth.unlock();
+    noteUp(pointerId);
+    heldPads.set(pointerId, Synth.noteOn(p.midi));
+    // Tapping a pad with the bass pitch class also anchors the shape there.
     if (shape && p.pc === shape.anchorPc) { anchor = i; computeShape(); renderGrid(); renderReadout(); }
     renderPadInfo();
     flash(i);
+  }
+
+  function noteUp(pointerId) {
+    const v = heldPads.get(pointerId);
+    if (v) { Synth.noteOff(v); heldPads.delete(pointerId); }
   }
 
   function openSheet(open) { $('sheet').hidden = !open; }
@@ -1250,13 +1423,26 @@ const UI = (() => {
 
     document.querySelectorAll('[data-set]').forEach(btn => btn.addEventListener('click', () => {
       const name = btn.dataset.set;
-      setSetting(name, name === 'fixed' ? btn.dataset.val === 'true' : btn.dataset.val);
+      setSetting(name, BOOLEAN_SETTINGS.has(name) ? btn.dataset.val === 'true' : btn.dataset.val);
     }));
+    $('volume').addEventListener('input', e => setSetting('volume', +e.target.value));
 
     $('grid').addEventListener('pointerdown', e => {
       const b = e.target.closest('.pad');
-      if (b) onPad(+b.dataset.i);
+      if (b) onPad(+b.dataset.i, e.pointerId);
     });
+    // Released anywhere: the grid may have re-rendered under the finger.
+    ['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, e => noteUp(e.pointerId)));
+    $('grid').addEventListener('contextmenu', e => e.preventDefault());
+
+    $('readout').addEventListener('click', playChord);
+    $('readout').addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playChord(); }
+    });
+    // Older iOS only unlocks audio on touchend or click, not pointerdown.
+    const unlockOnce = () => Synth.unlock();
+    document.addEventListener('touchend', unlockOnce, { once: true, passive: true });
+    document.addEventListener('click', unlockOnce, { once: true });
 
     $('diatonic').addEventListener('click', e => {
       const b = e.target.closest('[data-degree]');
@@ -1295,6 +1481,7 @@ const UI = (() => {
     $('octDown').addEventListener('click', () => setSetting('octave', settings.octave - 1));
     $('octUp').addEventListener('click', () => setSetting('octave', settings.octave + 1));
 
+    Synth.setVolume(settings.volume);
     $('app').hidden = false;
     render();
   }
