@@ -1,0 +1,663 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e0f12">
+<title>Pad Shapes</title>
+<style>
+  :root {
+    --bg: #0e0f12;
+    --panel: #181a20;
+    --panel-2: #22252d;
+    --line: #2e323b;
+    --text: #e9eaee;
+    --muted: #8a8f9a;
+    --pad-in: #c9ccd3;
+    --pad-in-text: #1a1c21;
+    --pad-root: #3f7cf0;
+    --pad-root-text: #ffffff;
+    --pad-out: #1d1f25;
+    --pad-out-text: #5b606b;
+    --pad-void: #0a0b0d;
+    --accent: #ffb627;
+    --warn: #ff5d5d;
+    --gap: 4px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none; user-select: none;
+    overscroll-behavior: none;
+  }
+  button, select { font: inherit; color: inherit; }
+  #app {
+    max-width: 520px; margin: 0 auto;
+    padding: calc(env(safe-area-inset-top) + 8px) 16px calc(env(safe-area-inset-bottom) + 12px);
+    display: flex; flex-direction: column; gap: 10px;
+  }
+
+  /* ---- Settings bar ---- */
+  .bar { display: flex; flex-direction: column; gap: 8px; }
+  .bar-row { display: flex; gap: 8px; align-items: stretch; }
+  .sel {
+    display: flex; flex-direction: column; justify-content: center;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 4px 10px; min-width: 0;
+  }
+  .sel.grow { flex: 1; }
+  .sel span { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .sel select {
+    background: transparent; border: 0; padding: 0; font-size: 17px; font-weight: 600;
+    min-width: 0; width: 100%; outline: none; -webkit-appearance: none; appearance: none;
+  }
+  .sel select option { background: var(--panel); color: var(--text); }
+  .icon-btn {
+    width: 48px; flex: none; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel); font-size: 22px; cursor: pointer;
+  }
+  .seg {
+    display: flex; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 3px; gap: 3px;
+  }
+  .seg button {
+    flex: 1; border: 0; border-radius: 7px; background: transparent;
+    padding: 8px 6px; font-weight: 600; color: var(--muted); cursor: pointer; white-space: nowrap;
+  }
+  .seg button[aria-checked="true"] { background: var(--text); color: var(--bg); }
+  .seg.mode { flex: 1.4; }
+  .seg.mode button { font-size: 16px; padding: 10px 6px; }
+  .summary {
+    flex: 1; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+    color: var(--muted); font-size: 13px; padding: 4px 8px; cursor: pointer; text-align: center;
+  }
+
+  .notice {
+    background: #3a2c10; color: #ffd98a; border-radius: 8px; padding: 8px 10px; font-size: 13px;
+  }
+
+  /* ---- Grid ---- */
+  #grid {
+    display: grid; grid-template-columns: repeat(8, 1fr); gap: var(--gap);
+    touch-action: manipulation;
+  }
+  .pad {
+    aspect-ratio: 1; border-radius: 6px; border: 0; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 600; cursor: pointer; position: relative;
+    transition: transform .06s ease-out;
+  }
+  .pad.in   { background: var(--pad-in);   color: var(--pad-in-text); }
+  .pad.root { background: var(--pad-root); color: var(--pad-root-text); }
+  .pad.out  { background: var(--pad-out);  color: var(--pad-out-text); }
+  .pad.void { background: var(--pad-void); color: transparent; cursor: default; }
+  .pad.hit  { transform: scale(.9); outline: 2px solid var(--accent); outline-offset: 1px; }
+  .pad .oct { font-size: 9px; font-weight: 500; opacity: .7; margin-left: 1px; align-self: flex-end; margin-bottom: 22%; }
+  .labels-off .pad:not(.hit) .lbl { visibility: hidden; }
+
+  /* ---- Readout ---- */
+  .readout {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px; text-align: center; min-height: 64px;
+    display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  }
+  .readout .big { font-size: 22px; font-weight: 700; }
+  .readout .small { font-size: 13px; color: var(--muted); }
+  .stage-note { color: var(--muted); font-size: 12px; text-align: center; margin: 0; }
+
+  /* ---- Settings sheet ---- */
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: flex-end; justify-content: center;
+    z-index: 10;
+  }
+  .backdrop[hidden] { display: none; }
+  .sheet {
+    width: 100%; max-width: 520px; background: var(--panel); border-radius: 16px 16px 0 0;
+    padding: 16px 16px calc(env(safe-area-inset-bottom) + 16px);
+    display: flex; flex-direction: column; gap: 14px; max-height: 90vh; overflow-y: auto;
+  }
+  .sheet h2 { margin: 0; font-size: 17px; }
+  .field { display: flex; flex-direction: column; gap: 6px; }
+  .field > span { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .field .seg { background: var(--panel-2); }
+  .stepper { display: flex; align-items: center; gap: 10px; }
+  .stepper button {
+    width: 48px; height: 44px; border-radius: 10px; border: 1px solid var(--line);
+    background: var(--panel-2); font-size: 22px; cursor: pointer;
+  }
+  .stepper output { min-width: 110px; text-align: center; font-size: 17px; font-weight: 600; }
+  .done {
+    border: 0; border-radius: 10px; background: var(--text); color: var(--bg);
+    padding: 12px; font-weight: 700; cursor: pointer;
+  }
+
+  /* ---- Test harness ---- */
+  .tests { padding: 16px; max-width: 760px; margin: 0 auto; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  .tests h1 { font-family: system-ui, sans-serif; font-size: 20px; }
+  .tests .pass { color: #6bdc8b; }
+  .tests .fail { color: var(--warn); }
+  .tests li { margin: 4px 0; }
+  .tests pre { white-space: pre-wrap; color: var(--muted); margin: 2px 0 0 18px; }
+</style>
+</head>
+<body>
+<div id="app" hidden>
+  <header class="bar">
+    <div class="bar-row">
+      <label class="sel"><span>Key</span><select id="key" aria-label="Key"></select></label>
+      <label class="sel grow"><span>Scale</span><select id="scale" aria-label="Scale"></select></label>
+      <button id="gear" class="icon-btn" aria-label="More settings">⚙</button>
+    </div>
+    <div class="bar-row">
+      <div class="seg mode" role="radiogroup" aria-label="Mode">
+        <button role="radio" data-set="mode" data-val="inKey">In Key</button>
+        <button role="radio" data-set="mode" data-val="chromatic">Chromatic</button>
+      </div>
+      <button id="summary" class="summary" aria-label="Layout settings"></button>
+    </div>
+  </header>
+  <div id="notice" class="notice" hidden></div>
+  <main id="grid" aria-label="Pad grid"></main>
+  <section id="readout" class="readout" aria-live="polite"></section>
+  <p class="stage-note">Stage 1 – grid only. Chords arrive in stage 2.</p>
+</div>
+
+<div id="sheet" class="backdrop" hidden>
+  <div class="sheet" role="dialog" aria-label="Settings">
+    <h2>Push settings</h2>
+    <div class="field"><span>Layout</span>
+      <div class="seg" role="radiogroup">
+        <button role="radio" data-set="layout" data-val="4ths">4ths</button>
+        <button role="radio" data-set="layout" data-val="3rds">3rds</button>
+        <button role="radio" data-set="layout" data-val="sequential">Sequential</button>
+      </div>
+    </div>
+    <div class="field"><span>Orientation</span>
+      <div class="seg" role="radiogroup">
+        <button role="radio" data-set="orientation" data-val="rows">Rows ▲</button>
+        <button role="radio" data-set="orientation" data-val="columns">Columns ▶</button>
+      </div>
+    </div>
+    <div class="field"><span>Fixed</span>
+      <div class="seg" role="radiogroup">
+        <button role="radio" data-set="fixed" data-val="false">Off – root at bottom left</button>
+        <button role="radio" data-set="fixed" data-val="true">On – C</button>
+      </div>
+    </div>
+    <div class="field"><span>Octave (bottom-left pad)</span>
+      <div class="stepper">
+        <button id="octDown" aria-label="Octave down">−</button>
+        <output id="octOut"></output>
+        <button id="octUp" aria-label="Octave up">+</button>
+      </div>
+    </div>
+    <div class="field"><span>Note names on pads</span>
+      <div class="seg" role="radiogroup">
+        <button role="radio" data-set="labels" data-val="all">All pads</button>
+        <button role="radio" data-set="labels" data-val="chord">Chord notes only</button>
+      </div>
+    </div>
+    <button id="sheetDone" class="done">Done</button>
+  </div>
+</div>
+
+<div id="tests" class="tests" hidden></div>
+
+<script>
+'use strict';
+
+/* =====================================================================
+   MUSIC LOGIC – pure functions, no DOM access.
+   Pad (r, c): r = 0 is the bottom row, c = 0 is the left column.
+   MIDI octave naming follows Ableton: C3 = MIDI 60.
+   ===================================================================== */
+const Music = (() => {
+  const SHARP = ['C','C♯','D','D♯','E','F','F♯','G','G♯','A','A♯','B'];
+  const FLAT  = ['C','D♭','D','E♭','E','F','G♭','G','A♭','A','B♭','B'];
+
+  // Same order as the Push key page (circle of fifths, sharps then flats).
+  const KEYS = [
+    ['C',0],['G',7],['D',2],['A',9],['E',4],['B',11],
+    ['F',5],['B♭',10],['E♭',3],['A♭',8],['D♭',1],['G♭',6],
+  ].map(([name, pc]) => ({ name, pc }));
+
+  // relMajor: semitones from the tonic up to the major key that shares the
+  // scale's key signature. Used only to choose sharps or flats.
+  const SCALES = [
+    { name: 'Major',             intervals: [0,2,4,5,7,9,11], relMajor: 0 },
+    { name: 'Minor',             intervals: [0,2,3,5,7,8,10], relMajor: 3 },
+    { name: 'Dorian',            intervals: [0,2,3,5,7,9,10], relMajor: 10 },
+    { name: 'Mixolydian',        intervals: [0,2,4,5,7,9,10], relMajor: 5 },
+    { name: 'Lydian',            intervals: [0,2,4,6,7,9,11], relMajor: 7 },
+    { name: 'Phrygian',          intervals: [0,1,3,5,7,8,10], relMajor: 8 },
+    { name: 'Locrian',           intervals: [0,1,3,5,6,8,10], relMajor: 1 },
+    { name: 'Harmonic Minor',    intervals: [0,2,3,5,7,8,11], relMajor: 3 },
+    { name: 'Melodic Minor',     intervals: [0,2,3,5,7,9,11], relMajor: 3 },
+    { name: 'Harmonic Major',    intervals: [0,2,4,5,7,8,11], relMajor: 0 },
+    { name: 'Phrygian Dominant', intervals: [0,1,4,5,7,8,10], relMajor: 8 },
+  ];
+
+  // Row offset per layout: scale degrees for In Key, semitones for Chromatic.
+  // The step along the main axis is always 1.
+  const LAYOUTS = {
+    '4ths':       { label: '4ths',       inKey: 3, chromatic: 5 },
+    '3rds':       { label: '3rds',       inKey: 2, chromatic: 4 },
+    'sequential': { label: 'Sequential', inKey: 8, chromatic: 8 },
+  };
+
+  const FLAT_SIDE = new Set([5, 10, 3, 8, 1, 6]); // F B♭ E♭ A♭ D♭ G♭
+
+  const DEFAULT_SETTINGS = Object.freeze({
+    key: 'C', scale: 'Major', mode: 'inKey', layout: '4ths',
+    orientation: 'rows', fixed: false, octave: 3,
+    strum: true, volume: 0.7, labels: 'all',
+  });
+  const OCTAVE_MIN = -2, OCTAVE_MAX = 7;
+
+  const mod = (n, m) => ((n % m) + m) % m;
+  const keyByName = name => KEYS.find(k => k.name === name);
+  const scaleByName = name => SCALES.find(s => s.name === name);
+
+  /** Fill in defaults and drop anything invalid (e.g. from old storage). */
+  function normaliseSettings(raw) {
+    const s = { ...DEFAULT_SETTINGS };
+    if (!raw || typeof raw !== 'object') return s;
+    if (keyByName(raw.key)) s.key = raw.key;
+    if (scaleByName(raw.scale)) s.scale = raw.scale;
+    if (raw.mode === 'inKey' || raw.mode === 'chromatic') s.mode = raw.mode;
+    if (LAYOUTS[raw.layout]) s.layout = raw.layout;
+    if (raw.orientation === 'rows' || raw.orientation === 'columns') s.orientation = raw.orientation;
+    if (typeof raw.fixed === 'boolean') s.fixed = raw.fixed;
+    if (Number.isInteger(raw.octave)) s.octave = Math.min(OCTAVE_MAX, Math.max(OCTAVE_MIN, raw.octave));
+    if (typeof raw.strum === 'boolean') s.strum = raw.strum;
+    if (typeof raw.volume === 'number' && raw.volume >= 0 && raw.volume <= 1) s.volume = raw.volume;
+    if (raw.labels === 'all' || raw.labels === 'chord') s.labels = raw.labels;
+    return s;
+  }
+
+  /** Sharps or flats for this key and scale, based on its key signature. */
+  function usesFlats(keyName, scaleName) {
+    const k = keyByName(keyName), sc = scaleByName(scaleName);
+    return FLAT_SIDE.has(mod(k.pc + sc.relMajor, 12));
+  }
+
+  function noteName(pc, flats) { return (flats ? FLAT : SHARP)[mod(pc, 12)]; }
+  function midiOctave(midi) { return Math.floor(midi / 12) - 2; }
+  function midiName(midi, flats) { return noteName(midi, flats) + midiOctave(midi); }
+
+  /** Pitch classes of the scale, starting on the key root. */
+  function scaleNotes(keyName, scaleName) {
+    const k = keyByName(keyName), sc = scaleByName(scaleName);
+    return sc.intervals.map(i => mod(k.pc + i, 12));
+  }
+
+  /** MIDI note of scale degree index d (0 = tonic; any integer, wraps octaves). */
+  function degreePitch(d, tonicMidi, intervals) {
+    const n = intervals.length, oct = Math.floor(d / n);
+    return tonicMidi + intervals[d - oct * n] + 12 * oct;
+  }
+
+  /**
+   * Where the grid starts.
+   * Chromatic: baseMidi is the bottom-left pitch.
+   * In Key: startDegree is the scale-degree index of the bottom-left pad.
+   * Fixed On in In Key: bottom-left is the lowest scale note at or above C
+   * (assumption – to be checked on the hardware).
+   */
+  function gridOrigin(s) {
+    const k = keyByName(s.key), sc = scaleByName(s.scale);
+    const cMidi = 12 * (s.octave + 2);
+    const tonicMidi = cMidi + k.pc;
+    if (s.mode === 'chromatic') {
+      return { tonicMidi, intervals: sc.intervals, baseMidi: s.fixed ? cMidi : tonicMidi, startDegree: null };
+    }
+    let startDegree = 0;
+    if (s.fixed) {
+      startDegree = -sc.intervals.length;
+      while (degreePitch(startDegree, tonicMidi, sc.intervals) < cMidi) startDegree++;
+    }
+    return { tonicMidi, intervals: sc.intervals, baseMidi: degreePitch(startDegree, tonicMidi, sc.intervals), startDegree };
+  }
+
+  function rowOffset(s) { return LAYOUTS[s.layout][s.mode]; }
+
+  /** Linear pad index: one step along the main axis, rowOffset across it. */
+  function padIndex(r, c, s) {
+    const row = rowOffset(s);
+    return s.orientation === 'rows' ? r * row + c : c * row + r;
+  }
+
+  function padPitchFrom(origin, r, c, s) {
+    const i = padIndex(r, c, s);
+    return s.mode === 'chromatic'
+      ? origin.baseMidi + i
+      : degreePitch(origin.startDegree + i, origin.tonicMidi, origin.intervals);
+  }
+
+  /** MIDI note of pad (r, c). */
+  function padPitch(r, c, s) { return padPitchFrom(gridOrigin(s), r, c, s); }
+
+  /**
+   * All 64 pads, index r*8 + c (bottom row first).
+   * state: 'root' | 'in' | 'out' (Chromatic only) | 'void' (outside MIDI 0–127)
+   */
+  function buildGrid(s) {
+    const origin = gridOrigin(s);
+    const k = keyByName(s.key), sc = scaleByName(s.scale);
+    const flats = usesFlats(s.key, s.scale);
+    const pads = [];
+    for (let r = 0; r < 8; r++) {
+      for (let c = 0; c < 8; c++) {
+        const midi = padPitchFrom(origin, r, c, s);
+        const pc = mod(midi, 12);
+        const degIdx = sc.intervals.indexOf(mod(pc - k.pc, 12));
+        const inScale = degIdx !== -1;
+        const valid = midi >= 0 && midi <= 127;
+        const isRoot = pc === k.pc;
+        pads.push({
+          r, c, midi, pc, valid, inScale, isRoot,
+          degree: inScale ? degIdx + 1 : null,
+          name: noteName(pc, flats),
+          fullName: midiName(midi, flats),
+          state: !valid ? 'void' : isRoot ? 'root' : inScale ? 'in' : 'out',
+        });
+      }
+    }
+    return pads;
+  }
+
+  /** Notice text for scales the In Key shapes don't suit, or null. */
+  function scaleNotice(s) {
+    return s.mode === 'inKey' && scaleByName(s.scale).intervals.length !== 7
+      ? 'Shapes vary in scales with other than 7 notes.'
+      : null;
+  }
+
+  return {
+    KEYS, SCALES, LAYOUTS, DEFAULT_SETTINGS, OCTAVE_MIN, OCTAVE_MAX,
+    keyByName, scaleByName, normaliseSettings, usesFlats, noteName, midiName, midiOctave,
+    scaleNotes, degreePitch, gridOrigin, rowOffset, padIndex, padPitch, buildGrid, scaleNotice,
+  };
+})();
+
+/* =====================================================================
+   STORAGE – localStorage behind try/catch (private mode, blocked storage).
+   ===================================================================== */
+const Store = (() => {
+  const KEYS = { settings: 'padshapes.settings.v1', progressions: 'padshapes.progressions.v1' };
+  function read(name, fallback) {
+    try {
+      const raw = localStorage.getItem(KEYS[name]);
+      return raw == null ? fallback : JSON.parse(raw);
+    } catch (e) { return fallback; }
+  }
+  function write(name, value) {
+    try { localStorage.setItem(KEYS[name], JSON.stringify(value)); return true; }
+    catch (e) { return false; }
+  }
+  return { read, write, KEYS };
+})();
+
+/* =====================================================================
+   TESTS – open index.html?test
+   ===================================================================== */
+function runTests() {
+  const M = Music;
+  const results = [];
+  const S = over => M.normaliseSettings({ ...M.DEFAULT_SETTINGS, ...over });
+  const at = (grid, r, c) => grid[r * 8 + c];
+  const row = (grid, r) => grid.slice(r * 8, r * 8 + 8);
+  const eq = (actual, expected, what) => {
+    const a = JSON.stringify(actual), e = JSON.stringify(expected);
+    if (a !== e) throw new Error(`${what}\n  expected ${e}\n  got      ${a}`);
+  };
+  const test = (name, fn) => {
+    try { fn(); results.push({ name, ok: true }); }
+    catch (e) { results.push({ name, ok: false, msg: e.message }); }
+  };
+
+  // ---- Acceptance tests for stage 1 ----
+  test('AT1 C Major · In Key · 4ths · Rows: bottom row C D E F G A B C, row 2 starts on F', () => {
+    const g = M.buildGrid(S({}));
+    eq(row(g, 0).map(p => p.name), ['C','D','E','F','G','A','B','C'], 'bottom row names');
+    eq(row(g, 0).map(p => p.midi), [60,62,64,65,67,69,71,72], 'bottom row pitches');
+    eq(at(g, 1, 0).name, 'F', '(1,0) name');
+    eq(at(g, 1, 0).midi, 65, '(1,0) pitch');
+  });
+
+  test('AT3 (grid part) C Major · In Key · 3rds: (0,0) (1,0) (2,0) are C E G stacked', () => {
+    const g = M.buildGrid(S({ layout: '3rds' }));
+    eq([at(g,0,0), at(g,1,0), at(g,2,0)].map(p => p.fullName), ['C3','E3','G3'], 'column 0, rows 0–2');
+    // The shape-placement half of this test (placeShape) lands in stage 2.
+  });
+
+  test('AT5 C Major · Chromatic · 4ths: bottom row C C♯ D D♯ E F F♯ G, row 2 starts on F, out-of-scale dimmed', () => {
+    const g = M.buildGrid(S({ mode: 'chromatic' }));
+    eq(row(g, 0).map(p => p.name), ['C','C♯','D','D♯','E','F','F♯','G'], 'bottom row names');
+    eq(at(g, 1, 0).midi, 65, '(1,0) pitch F3');
+    eq(row(g, 0).map(p => p.state), ['root','out','in','out','in','in','out','in'], 'bottom row states');
+    eq(g.filter(p => p.state === 'out').every(p => !p.inScale), true, 'every dimmed pad is out of scale');
+  });
+
+  // ---- Supporting checks ----
+  test('Every v1 scale has 7 ascending notes starting on 0', () => {
+    for (const sc of M.SCALES) {
+      eq(sc.intervals.length, 7, sc.name + ' length');
+      eq(sc.intervals[0], 0, sc.name + ' starts on 0');
+      eq(sc.intervals.every((v, i, a) => i === 0 || v > a[i - 1]) && sc.intervals[6] < 12, true, sc.name + ' ascending');
+    }
+  });
+
+  test('scaleNotes: D Dorian is D E F G A B C', () => {
+    eq(M.scaleNotes('D', 'Dorian').map(pc => M.noteName(pc, false)), ['D','E','F','G','A','B','C'], 'notes');
+  });
+
+  test('In Key 4ths: each row starts 3 scale degrees up (a diatonic 4th, so F→B is a tritone)', () => {
+    const g = M.buildGrid(S({}));
+    eq([0,1,2,3,4,5,6,7].map(r => at(g, r, 0).name), ['C','F','B','E','A','D','G','C'], 'left column');
+    eq([0,1,2,3,4,5,6,7].map(r => at(g, r, 0).midi), [60,65,71,76,81,86,91,96], 'left column pitches');
+  });
+
+  test('In Key: no out-of-scale pads in any layout', () => {
+    for (const layout of Object.keys(M.LAYOUTS)) {
+      const g = M.buildGrid(S({ layout, key: 'E♭', scale: 'Harmonic Minor' }));
+      eq(g.every(p => p.inScale), true, layout);
+    }
+  });
+
+  test('Sequential In Key: row 2 continues from the end of row 1', () => {
+    const g = M.buildGrid(S({ layout: 'sequential' }));
+    eq(at(g, 0, 7).fullName, 'C4', '(0,7)');
+    eq(at(g, 1, 0).fullName, 'D4', '(1,0)');
+  });
+
+  test('Sequential Chromatic: row 2 starts 8 semitones up', () => {
+    const g = M.buildGrid(S({ layout: 'sequential', mode: 'chromatic' }));
+    eq(at(g, 1, 0).midi - at(g, 0, 0).midi, 8, 'offset');
+  });
+
+  test('Columns ▶ orientation swaps the axes', () => {
+    const rows = M.buildGrid(S({}));
+    const cols = M.buildGrid(S({ orientation: 'columns' }));
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++)
+      eq(at(cols, r, c).midi, at(rows, c, r).midi, `(${r},${c})`);
+    eq([0,1,2,3].map(r => at(cols, r, 0).name), ['C','D','E','F'], 'up the left column');
+  });
+
+  test('Fixed Off: bottom-left is the key root (A Minor, octave 3 → A3 = 69)', () => {
+    eq(M.buildGrid(S({ key: 'A', scale: 'Minor' }))[0].fullName, 'A3', 'In Key');
+    eq(M.buildGrid(S({ key: 'A', scale: 'Minor', mode: 'chromatic' }))[0].fullName, 'A3', 'Chromatic');
+  });
+
+  test('Fixed On · Chromatic: bottom-left is C, root pads tinted for the key', () => {
+    const g = M.buildGrid(S({ key: 'D', fixed: true, mode: 'chromatic' }));
+    eq(g[0].fullName, 'C3', 'bottom-left');
+    eq(g[0].state, 'out', 'C is not in D Major');
+    eq(at(g, 0, 2).state, 'root', 'D at (0,2) is tinted as root');
+  });
+
+  test('Fixed On · In Key: bottom-left is the lowest scale note at or above C', () => {
+    eq(M.buildGrid(S({ key: 'D', fixed: true }))[0].fullName, 'C♯3', 'D Major → C♯3');
+    eq(M.buildGrid(S({ key: 'F', fixed: true }))[0].fullName, 'C3', 'F Major → C3');
+    eq(M.buildGrid(S({ key: 'B', fixed: true }))[0].fullName, 'C♯3', 'B Major → C♯3');
+    const g = M.buildGrid(S({ key: 'D', fixed: true }));
+    eq(row(g, 0).map(p => p.name), ['C♯','D','E','F♯','G','A','B','C♯'], 'D Major fixed bottom row');
+  });
+
+  test('Spelling: flat-side keys use flats, C and sharp keys use sharps', () => {
+    eq(M.buildGrid(S({ key: 'F', mode: 'chromatic' })).slice(0, 8).map(p => p.name),
+       ['F','G♭','G','A♭','A','B♭','B','C'], 'F chromatic');
+    eq(M.usesFlats('D', 'Minor'), true, 'D Minor shares F Major’s signature');
+    eq(M.usesFlats('A', 'Minor'), false, 'A Minor has no accidentals');
+  });
+
+  test('Pads outside MIDI 0–127 are void', () => {
+    const g = M.buildGrid(S({ layout: 'sequential', octave: 7 }));
+    eq(g.filter(p => p.midi > 127).every(p => p.state === 'void'), true, 'void above 127');
+    eq(g.some(p => p.state === 'void'), true, 'some exist');
+  });
+
+  test('normaliseSettings: rejects junk, keeps valid values', () => {
+    eq(M.normaliseSettings(null), { ...M.DEFAULT_SETTINGS }, 'null → defaults');
+    const s = M.normaliseSettings({ key: 'H', scale: 'Dorian', octave: 99, fixed: 'yes', layout: '3rds' });
+    eq([s.key, s.scale, s.octave, s.fixed, s.layout], ['C', 'Dorian', M.OCTAVE_MAX, false, '3rds'], 'mixed');
+  });
+
+  return results;
+}
+
+function renderTests(results) {
+  const el = document.getElementById('tests');
+  const failed = results.filter(r => !r.ok).length;
+  const esc = t => t.replace(/[&<>]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+  el.innerHTML = `<h1 class="${failed ? 'fail' : 'pass'}">${failed ? `${failed} failed` : 'All passed'} – ${results.length} tests</h1>
+    <ul>${results.map(r => `<li class="${r.ok ? 'pass' : 'fail'}">${r.ok ? '✓' : '✗'} ${esc(r.name)}${r.ok ? '' : `<pre>${esc(r.msg)}</pre>`}</li>`).join('')}</ul>
+    <p><a href="./" style="color:var(--text)">Back to the app</a></p>`;
+  el.hidden = false;
+  window.__testResults = results;
+}
+
+/* =====================================================================
+   UI
+   ===================================================================== */
+const UI = (() => {
+  const $ = id => document.getElementById(id);
+  let settings = Music.normaliseSettings(Store.read('settings', null));
+  let grid = [];
+  let tapped = null; // last tapped pad (r, c), shown in the readout
+
+  function set(name, value) {
+    settings = Music.normaliseSettings({ ...settings, [name]: value });
+    Store.write('settings', settings);
+    render();
+  }
+
+  function octaveLabel() {
+    const midi = 12 * (settings.octave + 2);
+    return `C${settings.octave} (MIDI ${midi})`;
+  }
+
+  function renderSegments() {
+    document.querySelectorAll('[data-set]').forEach(btn => {
+      const cur = String(settings[btn.dataset.set]);
+      btn.setAttribute('aria-checked', String(cur === btn.dataset.val));
+    });
+  }
+
+  function renderSummary() {
+    const L = Music.LAYOUTS[settings.layout].label;
+    const o = settings.orientation === 'rows' ? '▲' : '▶';
+    $('summary').textContent = `${L} ${o} · Fixed ${settings.fixed ? 'on' : 'off'} · Oct ${settings.octave}`;
+    $('octOut').textContent = octaveLabel();
+  }
+
+  function renderGrid() {
+    grid = Music.buildGrid(settings);
+    const el = $('grid');
+    el.classList.toggle('labels-off', settings.labels !== 'all');
+    const frag = document.createDocumentFragment();
+    for (let r = 7; r >= 0; r--) {          // top row first in the DOM
+      for (let c = 0; c < 8; c++) {
+        const p = grid[r * 8 + c];
+        const b = document.createElement('button');
+        b.className = 'pad ' + p.state + (tapped && tapped.r === r && tapped.c === c ? ' hit' : '');
+        b.dataset.r = r; b.dataset.c = c;
+        b.setAttribute('aria-label', p.valid ? p.fullName : 'unused');
+        if (p.valid) b.innerHTML = `<span class="lbl">${p.name}</span>`;
+        frag.appendChild(b);
+      }
+    }
+    el.replaceChildren(frag);
+  }
+
+  function renderReadout() {
+    const el = $('readout');
+    const p = tapped && grid[tapped.r * 8 + tapped.c];
+    if (p && p.valid) {
+      const deg = p.inScale ? `scale degree ${p.degree}` : 'not in scale';
+      el.innerHTML = `<div class="big">${p.fullName}</div>
+        <div class="small">Pad (${p.r},${p.c}) – MIDI ${p.midi} – ${deg}</div>`;
+    } else {
+      const b = grid[0];
+      el.innerHTML = `<div class="big">${Music.scaleNotes(settings.key, settings.scale)
+          .map(pc => Music.noteName(pc, Music.usesFlats(settings.key, settings.scale))).join(' ')}</div>
+        <div class="small">Bottom-left ${b.fullName} (MIDI ${b.midi}) – tap a pad to check it</div>`;
+    }
+  }
+
+  function renderNotice() {
+    const n = Music.scaleNotice(settings);
+    $('notice').hidden = !n;
+    $('notice').textContent = n || '';
+  }
+
+  function render() {
+    $('key').value = settings.key;
+    $('scale').value = settings.scale;
+    renderSegments(); renderSummary(); renderNotice(); renderGrid(); renderReadout();
+  }
+
+  function openSheet(open) { $('sheet').hidden = !open; }
+
+  function init() {
+    $('key').innerHTML = Music.KEYS.map(k => `<option value="${k.name}">${k.name}</option>`).join('');
+    $('scale').innerHTML = Music.SCALES.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
+    $('key').addEventListener('change', e => { tapped = null; set('key', e.target.value); });
+    $('scale').addEventListener('change', e => { tapped = null; set('scale', e.target.value); });
+
+    document.querySelectorAll('[data-set]').forEach(btn => btn.addEventListener('click', () => {
+      const name = btn.dataset.set;
+      const val = name === 'fixed' ? btn.dataset.val === 'true' : btn.dataset.val;
+      set(name, val);
+    }));
+
+    $('grid').addEventListener('pointerdown', e => {
+      const b = e.target.closest('.pad');
+      if (!b || b.classList.contains('void')) return;
+      tapped = { r: +b.dataset.r, c: +b.dataset.c };
+      renderGrid(); renderReadout();
+    });
+
+    $('gear').addEventListener('click', () => openSheet(true));
+    $('summary').addEventListener('click', () => openSheet(true));
+    $('sheetDone').addEventListener('click', () => openSheet(false));
+    $('sheet').addEventListener('click', e => { if (e.target === $('sheet')) openSheet(false); });
+    $('octDown').addEventListener('click', () => set('octave', settings.octave - 1));
+    $('octUp').addEventListener('click', () => set('octave', settings.octave + 1));
+
+    $('app').hidden = false;
+    render();
+  }
+
+  return { init };
+})();
+
+if (new URLSearchParams(location.search).has('test')) renderTests(runTests());
+else UI.init();
+</script>
+</body>
+</html>
