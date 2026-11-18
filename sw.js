@@ -2,7 +2,7 @@
    Bump VERSION whenever any cached file changes, or phones will keep the
    old copy. The new worker then installs in the background, takes over,
    and the page offers a reload. */
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = `pad-shapes-${VERSION}`;
 const ASSETS = [
   './',
