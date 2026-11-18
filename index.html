@@ -95,9 +95,13 @@
   .pad.root { background: var(--pad-root); color: var(--pad-root-text); }
   .pad.out  { background: var(--pad-out);  color: var(--pad-out-text); }
   .pad.void { background: var(--pad-void); color: transparent; cursor: default; }
-  .pad.hit  { transform: scale(.9); outline: 2px solid var(--accent); outline-offset: 1px; }
-  .pad .oct { font-size: 9px; font-weight: 500; opacity: .7; margin-left: 1px; align-self: flex-end; margin-bottom: 22%; }
-  .labels-off .pad:not(.hit) .lbl { visibility: hidden; }
+  /* Chord states sit on top of the base state. */
+  .pad.ghost { background: #4a3a1c; background: color-mix(in srgb, var(--accent) 30%, var(--pad-out)); color: rgba(255,255,255,.7); }
+  .pad.ghost.bass { box-shadow: inset 0 0 0 2px rgba(255,255,255,.45); }
+  .pad.chord { background: var(--accent); color: #1c1400; font-size: 14px; font-weight: 800; }
+  .pad.chord.bass { box-shadow: inset 0 0 0 3px #fff, 0 0 0 1px #fff; }
+  .pad.hit  { transform: scale(.88); }
+  .labels-off .pad:not(.chord) .lbl { visibility: hidden; }
 
   /* ---- Readout ---- */
   .readout {
@@ -106,8 +110,31 @@
     display: flex; flex-direction: column; justify-content: center; gap: 2px;
   }
   .readout .big { font-size: 22px; font-weight: 700; }
+  .readout .big .num { color: var(--accent); }
+  .readout .notes { font-size: 17px; font-weight: 600; letter-spacing: .02em; }
   .readout .small { font-size: 13px; color: var(--muted); }
-  .stage-note { color: var(--muted); font-size: 12px; text-align: center; margin: 0; }
+  .readout.warn .small { color: var(--warn); }
+  .pad-info { color: var(--muted); font-size: 12px; text-align: center; min-height: 15px; margin-top: -4px; }
+
+  /* ---- Chord pickers ---- */
+  .chord-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .chord-btn {
+    border: 1px solid var(--line); border-radius: 9px; background: var(--panel);
+    padding: 5px 0; display: flex; flex-direction: column; align-items: center; gap: 1px;
+    cursor: pointer; min-width: 0;
+  }
+  .chord-btn .n { font-size: 12px; color: var(--muted); }
+  .chord-btn .c { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: clip; max-width: 100%; }
+  .chord-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #1c1400; }
+  .chord-btn[aria-pressed="true"] .n { color: #1c1400; }
+  .pick-row { display: flex; gap: 6px; }
+  .pick-row .seg { flex: 1; }
+  .pick-row .seg button { padding: 9px 2px; font-size: 14px; }
+  .inv-btn {
+    flex: none; width: 76px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+    font-weight: 700; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  .inv-btn small { font-size: 10px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
 
   /* ---- Settings sheet ---- */
   .backdrop {
@@ -163,7 +190,12 @@
   <div id="notice" class="notice" hidden></div>
   <main id="grid" aria-label="Pad grid"></main>
   <section id="readout" class="readout" aria-live="polite"></section>
-  <p class="stage-note">Stage 1 – grid only. Chords arrive in stage 2.</p>
+  <div id="padInfo" class="pad-info"></div>
+  <div id="diatonic" class="chord-row" aria-label="Diatonic chords"></div>
+  <div class="pick-row">
+    <div id="types" class="seg" role="radiogroup" aria-label="Chord type"></div>
+    <button id="inversion" class="inv-btn" aria-label="Inversion"></button>
+  </div>
 </div>
 
 <div id="sheet" class="backdrop" hidden>
@@ -377,10 +409,185 @@ const Music = (() => {
       : null;
   }
 
+  /* ------------------------------------------------------------------
+     CHORDS
+     Chord: { source: 'diatonic'|'borrowed', sourceMode, degree: 1–7,
+              type, inversion }
+     ------------------------------------------------------------------ */
+  const MAJOR = [0,2,4,5,7,9,11];
+  const ROMAN = ['I','II','III','IV','V','VI','VII'];
+
+  const CHORD_TYPES = [
+    { id: 'triad', label: 'Triad', offsets: [0,2,4] },
+    { id: '7',     label: '7',     offsets: [0,2,4,6] },
+    { id: 'sus2',  label: 'sus2',  offsets: [0,1,4] },
+    { id: 'sus4',  label: 'sus4',  offsets: [0,3,4] },
+    { id: 'add9',  label: 'add9',  offsets: [0,2,4,8] },
+    { id: '6',     label: '6',     offsets: [0,2,4,5] },
+  ];
+  const typeById = id => CHORD_TYPES.find(t => t.id === id);
+
+  // Keyed by the semitones above the chord root (mod 12, sorted).
+  // name: chord-symbol suffix; num: numeral suffix; minor: lower-case numeral.
+  const QUALITIES = {
+    '0,4,7':    { name: '',       num: '' },
+    '0,3,7':    { name: 'm',      num: '',      minor: true },
+    '0,3,6':    { name: 'dim',    num: '°',     minor: true },
+    '0,4,8':    { name: 'aug',    num: '+' },
+    '0,4,7,11': { name: 'maj7',   num: 'maj7' },
+    '0,4,7,10': { name: '7',      num: '7' },
+    '0,3,7,10': { name: 'm7',     num: '7',     minor: true },
+    '0,3,6,10': { name: 'm7♭5',   num: 'ø7',    minor: true },
+    '0,3,6,9':  { name: 'dim7',   num: '°7',    minor: true },
+    '0,3,7,11': { name: 'mMaj7',  num: 'maj7',  minor: true },
+    '0,4,8,11': { name: 'maj7♯5', num: '+maj7' },
+    '0,4,8,10': { name: '7♯5',    num: '+7' },
+    '0,4,6,10': { name: '7♭5',    num: '7♭5' },
+    '0,2,7':    { name: 'sus2',   num: 'sus2' },
+    '0,5,7':    { name: 'sus4',   num: 'sus4' },
+    '0,2,4,7':  { name: 'add9',   num: 'add9' },
+    '0,2,3,7':  { name: 'madd9',  num: 'add9',  minor: true },
+    '0,4,7,9':  { name: '6',      num: '6' },
+    '0,3,7,9':  { name: 'm6',     num: '6',     minor: true },
+  };
+  // Fallback labels for unusual stacks, e.g. sus4 on vii in Major → B(4,♭5).
+  const INTERVAL_LABELS = ['1','♭2','2','♭3','3','4','♭5','5','♭6','6','♭7','7'];
+  const BLACK_KEYS = new Set([1,3,6,8,10]);
+
+  function chordSize(chord) { return typeById(chord.type).offsets.length; }
+
+  /** Fill in defaults and clamp the inversion to the chord size. */
+  function normaliseChord(raw) {
+    const c = { source: 'diatonic', sourceMode: null, degree: 1, type: 'triad', inversion: 0 };
+    if (!raw || typeof raw !== 'object') return c;
+    if (raw.source === 'borrowed' && scaleByName(raw.sourceMode)) { c.source = 'borrowed'; c.sourceMode = raw.sourceMode; }
+    if (Number.isInteger(raw.degree) && raw.degree >= 1 && raw.degree <= 7) c.degree = raw.degree;
+    if (typeById(raw.type)) c.type = raw.type;
+    if (Number.isInteger(raw.inversion) && raw.inversion >= 0 && raw.inversion < chordSize(c)) c.inversion = raw.inversion;
+    return c;
+  }
+
+  function sourceScale(chord, s) {
+    return scaleByName(chord.source === 'diatonic' ? s.scale : chord.sourceMode);
+  }
+
+  /** Root-position stack in semitones above the key root (the source mode's intervals). */
+  function rootPositionSemis(chord, s) {
+    const iv = sourceScale(chord, s).intervals;
+    return typeById(chord.type).offsets.map(o => degreePitch(chord.degree - 1 + o, 0, iv));
+  }
+
+  /**
+   * Voicing in ascending order, as semitones above C (so p % 12 is the pitch class).
+   * Inversion n puts the nth chord tone in the bass and lifts every note below
+   * it up by octaves until it sits above the bass. For ordinary chords this is
+   * the same as moving the lowest n notes up an octave.
+   */
+  function chordPitches(chord, s) {
+    const k = keyByName(s.key);
+    const rp = rootPositionSemis(chord, s).map(x => x + k.pc);
+    const bass = rp[chord.inversion];
+    return rp.map((p, i) => {
+      if (i === chord.inversion) return p;
+      while (p <= bass) p += 12;
+      return p;
+    }).sort((a, b) => a - b);
+  }
+
+  function chordQuality(chord, s) {
+    const rp = rootPositionSemis(chord, s);
+    const ivs = [...new Set(rp.map(x => mod(x - rp[0], 12)))].sort((a, b) => a - b);
+    const q = QUALITIES[ivs.join(',')];
+    if (q) return { name: q.name, num: q.num, minor: !!q.minor, known: true };
+    return {
+      name: '(' + ivs.slice(1).map(i => INTERVAL_LABELS[i]).join(',') + ')',
+      num: '', minor: ivs.includes(3) && !ivs.includes(4), known: false,
+    };
+  }
+
+  /** −1 for ♭, +1 for ♯: the chord root against the same degree of the key's major scale. */
+  function numeralAccidental(chord, s) {
+    const root = rootPositionSemis(chord, s)[0];
+    return mod(root - MAJOR[chord.degree - 1] + 6, 12) - 6;
+  }
+
+  function romanNumeral(chord, s) {
+    const q = chordQuality(chord, s), acc = numeralAccidental(chord, s);
+    const base = ROMAN[chord.degree - 1];
+    const pre = acc < 0 ? '♭'.repeat(-acc) : '♯'.repeat(acc);
+    return pre + (q.minor ? base.toLowerCase() : base) + q.num;
+  }
+
+  /** Flats for flat-side keys, and for black-key roots with a ♭ numeral (♭VII in C → B♭). */
+  function chordSpellsFlat(chord, s) {
+    if (usesFlats(s.key, s.scale)) return true;
+    const rootPc = mod(keyByName(s.key).pc + rootPositionSemis(chord, s)[0], 12);
+    return numeralAccidental(chord, s) < 0 && BLACK_KEYS.has(rootPc);
+  }
+
+  function chordName(chord, s) {
+    const f = chordSpellsFlat(chord, s);
+    const rootPc = keyByName(s.key).pc + rootPositionSemis(chord, s)[0];
+    const slash = chord.inversion ? '/' + noteName(chordPitches(chord, s)[0], f) : '';
+    return noteName(rootPc, f) + chordQuality(chord, s).name + slash;
+  }
+
+  /** Note names in voicing order, bass first. */
+  function chordNoteNames(chord, s) {
+    const f = chordSpellsFlat(chord, s);
+    return chordPitches(chord, s).map(p => noteName(p, f));
+  }
+
+  /**
+   * Find the chord shape on the grid.
+   * pitches: ascending, as from chordPitches (only the intervals and the
+   *   bass pitch class matter).
+   * grid: from buildGrid. anchor: optional pad index (r*8 + c) for the bass.
+   * Bass candidates are every pad with the bass pitch class, lowest pitch
+   * first, then nearest the bottom left. Each further note takes the pad with
+   * that exact pitch closest to the bass (Manhattan), ties to the lower row,
+   * then the left. Returns { primary, others, anchorMissed }, where a shape is
+   * { bass, pads } (pad indices, voicing order).
+   */
+  function placeShape(pitches, grid, anchor = null) {
+    const bassPc = mod(pitches[0], 12);
+    const rel = pitches.map(p => p - pitches[0]);
+    const idx = p => p.r * 8 + p.c;
+    const basses = grid
+      .filter(p => p.valid && p.pc === bassPc)
+      .sort((a, b) => a.midi - b.midi || (a.r + a.c) - (b.r + b.c) || a.r - b.r);
+
+    const fit = b => {
+      const pads = [idx(b)];
+      for (let i = 1; i < rel.length; i++) {
+        const target = b.midi + rel[i];
+        let best = null, bestD = Infinity;
+        for (const p of grid) {
+          if (!p.valid || p.midi !== target) continue;
+          const d = Math.abs(p.r - b.r) + Math.abs(p.c - b.c);
+          if (d < bestD || (d === bestD && (p.r < best.r || (p.r === best.r && p.c < best.c)))) {
+            best = p; bestD = d;
+          }
+        }
+        if (!best) return null;
+        pads.push(idx(best));
+      }
+      return { bass: pads[0], pads };
+    };
+
+    const shapes = basses.map(fit).filter(Boolean);
+    let primary = anchor == null ? null : shapes.find(sh => sh.bass === anchor) || null;
+    const anchorMissed = anchor != null && !primary;
+    if (!primary) primary = shapes[0] || null;
+    return { primary, others: shapes.filter(sh => sh !== primary), anchorMissed };
+  }
+
   return {
-    KEYS, SCALES, LAYOUTS, DEFAULT_SETTINGS, OCTAVE_MIN, OCTAVE_MAX,
+    KEYS, SCALES, LAYOUTS, DEFAULT_SETTINGS, OCTAVE_MIN, OCTAVE_MAX, CHORD_TYPES,
     keyByName, scaleByName, normaliseSettings, usesFlats, noteName, midiName, midiOctave,
     scaleNotes, degreePitch, gridOrigin, rowOffset, padIndex, padPitch, buildGrid, scaleNotice,
+    normaliseChord, chordSize, chordPitches, chordQuality, romanNumeral, chordName,
+    chordNoteNames, chordSpellsFlat, placeShape,
   };
 })();
 
@@ -432,7 +639,6 @@ function runTests() {
   test('AT3 (grid part) C Major · In Key · 3rds: (0,0) (1,0) (2,0) are C E G stacked', () => {
     const g = M.buildGrid(S({ layout: '3rds' }));
     eq([at(g,0,0), at(g,1,0), at(g,2,0)].map(p => p.fullName), ['C3','E3','G3'], 'column 0, rows 0–2');
-    // The shape-placement half of this test (placeShape) lands in stage 2.
   });
 
   test('AT5 C Major · Chromatic · 4ths: bottom row C C♯ D D♯ E F F♯ G, row 2 starts on F, out-of-scale dimmed', () => {
@@ -527,6 +733,127 @@ function runTests() {
     eq([s.key, s.scale, s.octave, s.fixed, s.layout], ['C', 'Dorian', M.OCTAVE_MAX, false, '3rds'], 'mixed');
   });
 
+  // ---- Stage 2: chords and shapes ----
+  const C = over => M.normaliseChord({ source: 'diatonic', degree: 1, type: 'triad', inversion: 0, ...over });
+  const coords = (shape) => shape.pads.map(i => [Math.floor(i / 8), i % 8]);
+  const shapeFor = (chord, s, anchor) => M.placeShape(M.chordPitches(chord, s), M.buildGrid(s), anchor);
+
+  test('AT2 C Major · I triad lights (0,0) C, (0,2) E and (1,1) G', () => {
+    const s = S({});
+    const sh = shapeFor(C({}), s).primary;
+    eq(coords(sh), [[0,0],[0,2],[1,1]], 'primary pads');
+    eq(M.chordNoteNames(C({}), s), ['C','E','G'], 'notes');
+    eq(M.chordName(C({}), s), 'C', 'name');
+    eq(M.romanNumeral(C({}), s), 'I', 'numeral');
+  });
+
+  test('AT3 C Major · In Key · 3rds: I triad is a vertical column at (0,0), (1,0), (2,0)', () => {
+    eq(coords(shapeFor(C({}), S({ layout: '3rds' })).primary), [[0,0],[1,0],[2,0]], 'primary pads');
+  });
+
+  test('AT4 D Dorian: degree 1 is Dm and degree 4 is G', () => {
+    const s = S({ key: 'D', scale: 'Dorian' });
+    eq(M.chordName(C({ degree: 1 }), s), 'Dm', 'degree 1');
+    eq(M.chordName(C({ degree: 4 }), s), 'G', 'degree 4');
+    eq([M.romanNumeral(C({ degree: 1 }), s), M.romanNumeral(C({ degree: 4 }), s)], ['i', 'IV'], 'numerals');
+  });
+
+  test('AT9 C Major · I · 1st inversion is C/E with E as the bass pad', () => {
+    const s = S({}), ch = C({ inversion: 1 });
+    eq(M.chordName(ch, s), 'C/E', 'name');
+    eq(M.chordNoteNames(ch, s), ['E','G','C'], 'notes');
+    const sh = shapeFor(ch, s).primary;
+    eq(M.buildGrid(s)[sh.bass].fullName, 'E3', 'bass pad pitch');
+    eq(coords(sh)[0], [0,2], 'bass pad position');
+  });
+
+  test('C Major diatonic triads and numerals', () => {
+    const s = S({});
+    eq([1,2,3,4,5,6,7].map(d => M.chordName(C({ degree: d }), s)), ['C','Dm','Em','F','G','Am','Bdim'], 'names');
+    eq([1,2,3,4,5,6,7].map(d => M.romanNumeral(C({ degree: d }), s)), ['I','ii','iii','IV','V','vi','vii°'], 'numerals');
+  });
+
+  test('C Major diatonic sevenths and numerals', () => {
+    const s = S({});
+    eq([1,2,3,4,5,6,7].map(d => M.chordName(C({ degree: d, type: '7' }), s)),
+       ['Cmaj7','Dm7','Em7','Fmaj7','G7','Am7','Bm7♭5'], 'names');
+    eq([1,2,3,4,5,6,7].map(d => M.romanNumeral(C({ degree: d, type: '7' }), s)),
+       ['Imaj7','ii7','iii7','IVmaj7','V7','vi7','viiø7'], 'numerals');
+  });
+
+  test('A Minor numerals are relative to A Major', () => {
+    const s = S({ key: 'A', scale: 'Minor' });
+    eq([1,2,3,4,5,6,7].map(d => M.romanNumeral(C({ degree: d }), s)), ['i','ii°','♭III','iv','v','♭VI','♭VII'], 'numerals');
+    eq([1,3,6,7].map(d => M.chordName(C({ degree: d }), s)), ['Am','C','F','G'], 'names');
+  });
+
+  test('A Harmonic Minor degree 5 is E with G♯', () => {
+    const s = S({ key: 'A', scale: 'Harmonic Minor' });
+    eq(M.chordName(C({ degree: 5 }), s), 'E', 'name');
+    eq(M.chordNoteNames(C({ degree: 5 }), s), ['E','G♯','B'], 'notes');
+    eq(M.romanNumeral(C({ degree: 5 }), s), 'V', 'numeral');
+  });
+
+  test('Other types: sus2, sus4, add9, 6', () => {
+    const s = S({});
+    eq(M.chordName(C({ type: 'sus2' }), s), 'Csus2', 'sus2');
+    eq(M.chordName(C({ type: 'sus4', degree: 5 }), s), 'Gsus4', 'sus4');
+    eq(M.chordName(C({ type: 'add9' }), s), 'Cadd9', 'add9');
+    eq(M.chordNoteNames(C({ type: 'add9' }), s), ['C','E','G','D'], 'add9 notes');
+    eq(M.chordName(C({ type: '6', degree: 2 }), s), 'Dm6', 'm6');
+    eq(M.chordName(C({ type: 'sus4', degree: 7 }), s), 'B(4,♭5)', 'odd stack falls back to intervals');
+  });
+
+  test('Inversions: 2nd inversion triad and 3rd inversion seventh', () => {
+    const s = S({});
+    eq(M.chordName(C({ inversion: 2 }), s), 'C/G', 'C/G');
+    eq(M.chordNoteNames(C({ inversion: 2 }), s), ['G','C','E'], 'C/G notes');
+    eq(M.chordName(C({ degree: 5, type: '7', inversion: 3 }), s), 'G7/F', 'G7/F');
+    eq(M.chordNoteNames(C({ degree: 5, type: '7', inversion: 3 }), s), ['F','G','B','D'], 'G7/F notes');
+    eq(M.chordNoteNames(C({ type: 'add9', inversion: 3 }), s), ['D','E','G','C'], 'Cadd9/D notes');
+    eq(M.normaliseChord({ type: 'triad', inversion: 3 }).inversion, 0, 'triad has no 3rd inversion');
+  });
+
+  test('Spelling: ♭VII in C is B♭ (flats for a black-key ♭ root), ♭VII in E Minor keeps F♯', () => {
+    // A diatonic stand-in for borrowed chords until stage 3: degree 7 of C Mixolydian.
+    eq(M.chordNoteNames(C({ degree: 7 }), S({ scale: 'Mixolydian' })), ['B♭','D','F'], 'B♭ D F');
+    eq(M.romanNumeral(C({ degree: 7 }), S({ scale: 'Mixolydian' })), '♭VII', 'numeral');
+    eq(M.chordNoteNames(C({ degree: 7 }), S({ key: 'E', scale: 'Minor' })), ['D','F♯','A'], 'D F♯ A');
+  });
+
+  test('Shape pads hold exactly the chord pitches', () => {
+    for (const layout of ['4ths', '3rds', 'sequential']) for (const mode of ['inKey', 'chromatic'])
+      for (let d = 1; d <= 7; d++) {
+        const s = S({ layout, mode, key: 'E♭', scale: 'Dorian' }), ch = C({ degree: d, type: '7', inversion: 1 });
+        const g = M.buildGrid(s), p = M.chordPitches(ch, s), sh = M.placeShape(p, g).primary;
+        eq(sh.pads.map(i => g[i].midi - g[sh.bass].midi), p.map(x => x - p[0]), `${layout} ${mode} degree ${d}`);
+      }
+  });
+
+  test('Other positions: each starts on a different bass pad with the bass pitch class', () => {
+    const s = S({}), g = M.buildGrid(s), res = shapeFor(C({}), s);
+    eq(res.others.length > 0, true, 'some other positions');
+    const basses = [res.primary, ...res.others].map(sh => sh.bass);
+    eq(new Set(basses).size, basses.length, 'distinct bass pads');
+    eq(res.others.every(sh => g[sh.bass].pc === 0), true, 'all on C');
+  });
+
+  test('Anchor: tapping another C pad makes it the primary position', () => {
+    const s = S({}), g = M.buildGrid(s);
+    const c4 = g.findIndex(p => p.fullName === 'C4' && p.r === 1);   // (1,4)
+    const res = shapeFor(C({}), s, c4);
+    eq(res.primary.bass, c4, 'primary bass');
+    eq(res.anchorMissed, false, 'anchor fits');
+    eq(shapeFor(C({}), s, 63).anchorMissed, true, 'non-bass pad is not an anchor');
+  });
+
+  test('Shape that does not fit from the lowest bass moves to the next bass pad', () => {
+    // Sequential In Key at octave 7: low pads exist but high notes run past MIDI 127.
+    const s = S({ layout: 'sequential', octave: 6 }), g = M.buildGrid(s);
+    const res = shapeFor(C({ type: 'add9' }), s);
+    eq(res.primary === null || res.primary.pads.every(i => g[i].valid), true, 'only valid pads used');
+  });
+
   return results;
 }
 
@@ -546,25 +873,34 @@ function renderTests(results) {
    ===================================================================== */
 const UI = (() => {
   const $ = id => document.getElementById(id);
+  const INV_LABELS = ['Root', '1st', '2nd', '3rd'];
   let settings = Music.normaliseSettings(Store.read('settings', null));
+  let chord = Music.normaliseChord({ degree: 1, type: 'triad' }); // null = no chord shown
+  let anchor = null;    // pad index chosen as the bass, or null for the default
   let grid = [];
-  let tapped = null; // last tapped pad (r, c), shown in the readout
+  let shape = null;     // result of placeShape for the current chord
+  let lastTap = null;   // { index, note } for the pad info line
 
-  function set(name, value) {
+  function setSetting(name, value) {
     settings = Music.normaliseSettings({ ...settings, [name]: value });
     Store.write('settings', settings);
+    anchor = null;
+    render();
+  }
+
+  function setChord(next) {
+    chord = next ? Music.normaliseChord(next) : null;
+    anchor = null;
     render();
   }
 
   function octaveLabel() {
-    const midi = 12 * (settings.octave + 2);
-    return `C${settings.octave} (MIDI ${midi})`;
+    return `C${settings.octave} (MIDI ${12 * (settings.octave + 2)})`;
   }
 
   function renderSegments() {
     document.querySelectorAll('[data-set]').forEach(btn => {
-      const cur = String(settings[btn.dataset.set]);
-      btn.setAttribute('aria-checked', String(cur === btn.dataset.val));
+      btn.setAttribute('aria-checked', String(String(settings[btn.dataset.set]) === btn.dataset.val));
     });
   }
 
@@ -575,19 +911,34 @@ const UI = (() => {
     $('octOut').textContent = octaveLabel();
   }
 
-  function renderGrid() {
+  function computeShape() {
     grid = Music.buildGrid(settings);
+    shape = chord ? Music.placeShape(Music.chordPitches(chord, settings), grid, anchor) : null;
+  }
+
+  function renderGrid() {
     const el = $('grid');
     el.classList.toggle('labels-off', settings.labels !== 'all');
+    const primary = new Set(shape && shape.primary ? shape.primary.pads : []);
+    const ghosts = new Set(shape ? shape.others.flatMap(sh => sh.pads) : []);
+    const ghostBasses = new Set(shape ? shape.others.map(sh => sh.bass) : []);
+    const bass = shape && shape.primary ? shape.primary.bass : -1;
+    const flats = chord ? Music.chordSpellsFlat(chord, settings) : null;
+
     const frag = document.createDocumentFragment();
     for (let r = 7; r >= 0; r--) {          // top row first in the DOM
       for (let c = 0; c < 8; c++) {
-        const p = grid[r * 8 + c];
+        const i = r * 8 + c, p = grid[i];
         const b = document.createElement('button');
-        b.className = 'pad ' + p.state + (tapped && tapped.r === r && tapped.c === c ? ' hit' : '');
-        b.dataset.r = r; b.dataset.c = c;
+        let cls = 'pad ' + p.state;
+        let name = p.name;
+        if (primary.has(i)) { cls += ' chord'; name = Music.noteName(p.pc, flats); }
+        else if (ghosts.has(i)) { cls += ' ghost'; name = Music.noteName(p.pc, flats); }
+        if (i === bass || (ghostBasses.has(i) && !primary.has(i))) cls += ' bass';
+        b.className = cls;
+        b.dataset.i = i;
         b.setAttribute('aria-label', p.valid ? p.fullName : 'unused');
-        if (p.valid) b.innerHTML = `<span class="lbl">${p.name}</span>`;
+        if (p.valid) b.innerHTML = `<span class="lbl">${name}</span>`;
         frag.appendChild(b);
       }
     }
@@ -596,17 +947,49 @@ const UI = (() => {
 
   function renderReadout() {
     const el = $('readout');
-    const p = tapped && grid[tapped.r * 8 + tapped.c];
-    if (p && p.valid) {
-      const deg = p.inScale ? `scale degree ${p.degree}` : 'not in scale';
-      el.innerHTML = `<div class="big">${p.fullName}</div>
-        <div class="small">Pad (${p.r},${p.c}) – MIDI ${p.midi} – ${deg}</div>`;
-    } else {
-      const b = grid[0];
-      el.innerHTML = `<div class="big">${Music.scaleNotes(settings.key, settings.scale)
-          .map(pc => Music.noteName(pc, Music.usesFlats(settings.key, settings.scale))).join(' ')}</div>
-        <div class="small">Bottom-left ${b.fullName} (MIDI ${b.midi}) – tap a pad to check it</div>`;
+    el.classList.remove('warn');
+    if (!chord) {
+      const f = Music.usesFlats(settings.key, settings.scale);
+      el.innerHTML = `<div class="notes">${Music.scaleNotes(settings.key, settings.scale).map(pc => Music.noteName(pc, f)).join(' ')}</div>
+        <div class="small">${settings.key} ${settings.scale} – bottom-left ${grid[0].fullName} (MIDI ${grid[0].midi})</div>`;
+      return;
     }
+    const name = Music.chordName(chord, settings);
+    const num = Music.romanNumeral(chord, settings);
+    const notes = Music.chordNoteNames(chord, settings).join(' ');
+    let small = '';
+    if (!shape.primary) { small = 'Doesn’t fit on the grid at this octave'; el.classList.add('warn'); }
+    else if (shape.anchorMissed) { small = 'Doesn’t fit from that pad'; el.classList.add('warn'); }
+    el.innerHTML = `<div class="big">${name} <span class="sep">–</span> <span class="num">${num}</span></div>
+      <div class="notes">${notes}</div>${small ? `<div class="small">${small}</div>` : ''}`;
+  }
+
+  function renderPadInfo() {
+    const p = lastTap != null && grid[lastTap];
+    $('padInfo').textContent = p && p.valid
+      ? `Pad (${p.r},${p.c}) – ${p.fullName} – MIDI ${p.midi} – ${p.inScale ? 'scale degree ' + p.degree : 'not in scale'}`
+      : '';
+  }
+
+  function renderDiatonic() {
+    const el = $('diatonic');
+    const type = chord ? chord.type : 'triad';
+    el.innerHTML = [1,2,3,4,5,6,7].map(d => {
+      const ch = Music.normaliseChord({ degree: d, type });
+      const on = chord && chord.source === 'diatonic' && chord.degree === d;
+      return `<button class="chord-btn" data-degree="${d}" aria-pressed="${!!on}">
+        <span class="n">${Music.romanNumeral(ch, settings)}</span>
+        <span class="c">${Music.chordName(ch, settings)}</span></button>`;
+    }).join('');
+  }
+
+  function renderTypes() {
+    $('types').innerHTML = Music.CHORD_TYPES.map(t =>
+      `<button role="radio" data-type="${t.id}" aria-checked="${!!chord && chord.type === t.id}">${t.label}</button>`
+    ).join('');
+    const inv = chord ? chord.inversion : 0;
+    $('inversion').innerHTML = `<small>Inversion</small>${INV_LABELS[inv]}`;
+    $('inversion').disabled = !chord;
   }
 
   function renderNotice() {
@@ -618,7 +1001,30 @@ const UI = (() => {
   function render() {
     $('key').value = settings.key;
     $('scale').value = settings.scale;
-    renderSegments(); renderSummary(); renderNotice(); renderGrid(); renderReadout();
+    computeShape();
+    renderSegments(); renderSummary(); renderNotice();
+    renderGrid(); renderReadout(); renderPadInfo(); renderDiatonic(); renderTypes();
+  }
+
+  function flash(i) {
+    const b = $('grid').querySelector(`[data-i="${i}"]`);
+    if (!b) return;
+    b.classList.add('hit');
+    setTimeout(() => b.classList.remove('hit'), 140);
+  }
+
+  function onPad(i) {
+    const p = grid[i];
+    if (!p || !p.valid) return;
+    lastTap = i;
+    // Tapping a pad with the bass pitch class anchors the shape there.
+    // Any other pad only plays its note (audio arrives in stage 4).
+    if (chord) {
+      const bassPc = ((Music.chordPitches(chord, settings)[0] % 12) + 12) % 12;
+      if (p.pc === bassPc) { anchor = i; computeShape(); renderGrid(); renderReadout(); }
+    }
+    renderPadInfo();
+    flash(i);
   }
 
   function openSheet(open) { $('sheet').hidden = !open; }
@@ -626,28 +1032,45 @@ const UI = (() => {
   function init() {
     $('key').innerHTML = Music.KEYS.map(k => `<option value="${k.name}">${k.name}</option>`).join('');
     $('scale').innerHTML = Music.SCALES.map(s => `<option value="${s.name}">${s.name}</option>`).join('');
-    $('key').addEventListener('change', e => { tapped = null; set('key', e.target.value); });
-    $('scale').addEventListener('change', e => { tapped = null; set('scale', e.target.value); });
+    $('key').addEventListener('change', e => setSetting('key', e.target.value));
+    $('scale').addEventListener('change', e => setSetting('scale', e.target.value));
 
     document.querySelectorAll('[data-set]').forEach(btn => btn.addEventListener('click', () => {
       const name = btn.dataset.set;
-      const val = name === 'fixed' ? btn.dataset.val === 'true' : btn.dataset.val;
-      set(name, val);
+      setSetting(name, name === 'fixed' ? btn.dataset.val === 'true' : btn.dataset.val);
     }));
 
     $('grid').addEventListener('pointerdown', e => {
       const b = e.target.closest('.pad');
-      if (!b || b.classList.contains('void')) return;
-      tapped = { r: +b.dataset.r, c: +b.dataset.c };
-      renderGrid(); renderReadout();
+      if (b) onPad(+b.dataset.i);
+    });
+
+    $('diatonic').addEventListener('click', e => {
+      const b = e.target.closest('[data-degree]');
+      if (!b) return;
+      const d = +b.dataset.degree;
+      // Tapping the lit chord again clears it, leaving the plain grid.
+      if (chord && chord.source === 'diatonic' && chord.degree === d) setChord(null);
+      else setChord({ source: 'diatonic', degree: d, type: chord ? chord.type : 'triad', inversion: chord ? chord.inversion : 0 });
+    });
+
+    $('types').addEventListener('click', e => {
+      const b = e.target.closest('[data-type]');
+      if (!b) return;
+      setChord({ ...(chord || { degree: 1 }), type: b.dataset.type });
+    });
+
+    $('inversion').addEventListener('click', () => {
+      if (!chord) return;
+      setChord({ ...chord, inversion: (chord.inversion + 1) % Music.chordSize(chord) });
     });
 
     $('gear').addEventListener('click', () => openSheet(true));
     $('summary').addEventListener('click', () => openSheet(true));
     $('sheetDone').addEventListener('click', () => openSheet(false));
     $('sheet').addEventListener('click', e => { if (e.target === $('sheet')) openSheet(false); });
-    $('octDown').addEventListener('click', () => set('octave', settings.octave - 1));
-    $('octUp').addEventListener('click', () => set('octave', settings.octave + 1));
+    $('octDown').addEventListener('click', () => setSetting('octave', settings.octave - 1));
+    $('octUp').addEventListener('click', () => setSetting('octave', settings.octave + 1));
 
     $('app').hidden = false;
     render();
