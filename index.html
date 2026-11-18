@@ -38,7 +38,7 @@
   #app {
     max-width: 520px; margin: 0 auto;
     padding: calc(env(safe-area-inset-top) + 8px) 16px calc(env(safe-area-inset-bottom) + 12px);
-    display: flex; flex-direction: column; gap: 10px;
+    display: flex; flex-direction: column; gap: 8px;
   }
 
   /* ---- Settings bar ---- */
@@ -106,15 +106,16 @@
   /* ---- Readout ---- */
   .readout {
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
-    padding: 12px; text-align: center; min-height: 64px;
+    padding: 7px 12px; text-align: center; min-height: 58px;
     display: flex; flex-direction: column; justify-content: center; gap: 2px;
   }
-  .readout .big { font-size: 22px; font-weight: 700; }
+  .readout .big { font-size: 21px; font-weight: 700; }
+  .readout .src { color: var(--muted); font-size: 13px; font-weight: 500; letter-spacing: 0; }
   .readout .big .num { color: var(--accent); }
   .readout .notes { font-size: 17px; font-weight: 600; letter-spacing: .02em; }
   .readout .small { font-size: 13px; color: var(--muted); }
   .readout.warn .small { color: var(--warn); }
-  .pad-info { color: var(--muted); font-size: 12px; text-align: center; min-height: 15px; margin-top: -4px; }
+  .pad-info { color: var(--muted); font-size: 12px; text-align: center; height: 14px; line-height: 14px; margin: -3px 0 -2px; }
 
   /* ---- Chord pickers ---- */
   .chord-row { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
@@ -127,6 +128,27 @@
   .chord-btn .c { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: clip; max-width: 100%; }
   .chord-btn[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #1c1400; }
   .chord-btn[aria-pressed="true"] .n { color: #1c1400; }
+  .borrowed-row {
+    display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none;
+    margin: 0 -16px; padding: 0 16px; scroll-padding: 0 16px;
+  }
+  .borrowed-row::-webkit-scrollbar { display: none; }
+  .borrowed-row .chord-btn { flex: none; min-width: 58px; padding: 5px 6px; border-style: dashed; position: relative; }
+  .borrowed-row .chord-btn[aria-pressed="true"] { border-style: solid; }
+  .borrowed-row .tag { font-size: 10px; color: var(--muted); align-self: center; flex: none; writing-mode: vertical-rl; transform: rotate(180deg); text-transform: uppercase; letter-spacing: .06em; }
+  .chord-btn .w { position: absolute; top: 1px; right: 3px; font-size: 10px; color: var(--warn); }
+  .chord-btn[aria-pressed="true"] .w { color: #7a1010; }
+  .missing {
+    display: flex; align-items: center; gap: 8px; margin-top: -4px;
+    background: #3a1616; border: 1px dashed var(--warn); border-radius: 10px; padding: 3px 3px 3px 10px;
+    color: #ffc9c9; font-size: 13px; line-height: 1.25;
+  }
+  .missing[hidden] { display: none; }
+  .missing span { flex: 1; }
+  .missing button {
+    flex: none; border: 0; border-radius: 8px; background: var(--warn); color: #fff;
+    font-weight: 700; padding: 8px 10px; cursor: pointer; font-size: 13px;
+  }
   .pick-row { display: flex; gap: 6px; }
   .pick-row .seg { flex: 1; }
   .pick-row .seg button { padding: 9px 2px; font-size: 14px; }
@@ -190,8 +212,13 @@
   <div id="notice" class="notice" hidden></div>
   <main id="grid" aria-label="Pad grid"></main>
   <section id="readout" class="readout" aria-live="polite"></section>
+  <div id="missing" class="missing" role="alert" hidden>
+    <span id="missingText"></span>
+    <button id="toChromatic">Show in Chromatic</button>
+  </div>
   <div id="padInfo" class="pad-info"></div>
   <div id="diatonic" class="chord-row" aria-label="Diatonic chords"></div>
+  <div id="borrowed" class="borrowed-row" aria-label="Borrowed chords"></div>
   <div class="pick-row">
     <div id="types" class="seg" role="radiogroup" aria-label="Chord type"></div>
     <button id="inversion" class="inv-btn" aria-label="Inversion"></button>
@@ -518,9 +545,12 @@ const Music = (() => {
     return pre + (q.minor ? base.toLowerCase() : base) + q.num;
   }
 
-  /** Flats for flat-side keys, and for black-key roots with a ♭ numeral (♭VII in C → B♭). */
+  /**
+   * Flats if the chord's source mode is on the flat side in this key (so
+   * borrowed iv in C is F A♭ C), and for black-key roots with a ♭ numeral.
+   */
   function chordSpellsFlat(chord, s) {
-    if (usesFlats(s.key, s.scale)) return true;
+    if (usesFlats(s.key, sourceScale(chord, s).name)) return true;
     const rootPc = mod(keyByName(s.key).pc + rootPositionSemis(chord, s)[0], 12);
     return numeralAccidental(chord, s) < 0 && BLACK_KEYS.has(rootPc);
   }
@@ -582,7 +612,95 @@ const Music = (() => {
     return { primary, others: shapes.filter(sh => sh !== primary), anchorMissed };
   }
 
+  /* ------------------------------------------------------------------
+     BORROWED CHORDS
+     The family comes from the current scale's 3rd. Numerals in the
+     comments are for triads; the app works them out from the notes.
+     ------------------------------------------------------------------ */
+  const BORROWED = {
+    major: [
+      ['Minor', 4],        // iv
+      ['Minor', 3],        // ♭III
+      ['Minor', 6],        // ♭VI
+      ['Minor', 7],        // ♭VII
+      ['Minor', 5],        // v
+      ['Minor', 2],        // ii°
+      ['Phrygian', 2],     // ♭II
+      ['Lydian', 2],       // II
+    ],
+    minor: [
+      ['Dorian', 4],          // IV
+      ['Harmonic Minor', 5],  // V
+      ['Major', 1],           // I
+      ['Dorian', 2],          // ii (the spec says II, but Dorian's 2nd degree is minor)
+      ['Phrygian', 2],        // ♭II
+      ['Melodic Minor', 6],   // vi°
+    ],
+  };
+
+  function scaleFamily(scaleName) {
+    return scaleByName(scaleName).intervals.includes(4) ? 'major' : 'minor';
+  }
+
+  /** (sourceMode, degree) pairs for the scale's family. */
+  function borrowedFor(scaleName) {
+    return BORROWED[scaleFamily(scaleName)].map(([sourceMode, degree]) => ({ sourceMode, degree }));
+  }
+
+  function pcSetKey(chord, s) {
+    return [...new Set(chordPitches(chord, s).map(p => mod(p, 12)))].sort((a, b) => a - b).join(',');
+  }
+
+  /**
+   * Borrowed chords of the given type for these settings, leaving out any
+   * with the same notes as a diatonic chord (e.g. ♭VII in Mixolydian).
+   */
+  function borrowedChords(s, type) {
+    const diatonic = new Set([1,2,3,4,5,6,7].map(d => pcSetKey(normaliseChord({ degree: d, type }), s)));
+    return borrowedFor(s.scale)
+      .map(b => normaliseChord({ source: 'borrowed', sourceMode: b.sourceMode, degree: b.degree, type }))
+      .filter(ch => !diatonic.has(pcSetKey(ch, s)));
+  }
+
+  /** Chord notes whose pitch class isn't in the current scale: [{ pc, name }]. */
+  function missingNotes(chord, s) {
+    const inScale = new Set(scaleNotes(s.key, s.scale));
+    const f = chordSpellsFlat(chord, s);
+    const seen = new Set(), out = [];
+    for (const p of chordPitches(chord, s)) {
+      const pc = mod(p, 12);
+      if (!inScale.has(pc) && !seen.has(pc)) { seen.add(pc); out.push({ pc, name: noteName(pc, f) }); }
+    }
+    return out;
+  }
+
+  function missingMessage(missing) {
+    const n = missing.length;
+    return `Switch Push to Chromatic – ${n} note${n === 1 ? '' : 's'} not in scale (${missing.map(m => m.name).join(', ')})`;
+  }
+
+  /**
+   * Place a chord for the current mode. In In Key, notes outside the scale
+   * have no pad, so only the playable notes are placed (relative to the
+   * lowest playable one) and the rest are listed in `missing`.
+   * anchorPc: the pitch class a tap must have to re-anchor the shape.
+   */
+  function placeChord(chord, s, grid, anchor = null) {
+    const pitches = chordPitches(chord, s);
+    const missing = s.mode === 'inKey' ? missingNotes(chord, s) : [];
+    const gone = new Set(missing.map(m => m.pc));
+    const playable = pitches.filter(p => !gone.has(mod(p, 12)));
+    if (!playable.length) return { primary: null, others: [], anchorMissed: false, missing, bassMissing: true, anchorPc: null };
+    return {
+      ...placeShape(playable, grid, anchor),
+      missing,
+      bassMissing: playable[0] !== pitches[0],
+      anchorPc: mod(playable[0], 12),
+    };
+  }
+
   return {
+    BORROWED, scaleFamily, borrowedFor, borrowedChords, missingNotes, missingMessage, placeChord,
     KEYS, SCALES, LAYOUTS, DEFAULT_SETTINGS, OCTAVE_MIN, OCTAVE_MAX, CHORD_TYPES,
     keyByName, scaleByName, normaliseSettings, usesFlats, noteName, midiName, midiOctave,
     scaleNotes, degreePitch, gridOrigin, rowOffset, padIndex, padPitch, buildGrid, scaleNotice,
@@ -854,6 +972,81 @@ function runTests() {
     eq(res.primary === null || res.primary.pads.every(i => g[i].valid), true, 'only valid pads used');
   });
 
+  // ---- Stage 3: borrowed chords and the In Key warning ----
+  const B = (sourceMode, degree, over) => M.normaliseChord({ source: 'borrowed', sourceMode, degree, type: 'triad', inversion: 0, ...over });
+
+  test('AT6 C Major · ♭VII is B♭ – ♭VII – B♭ D F, warns in In Key, places fully in Chromatic', () => {
+    const s = S({}), ch = B('Minor', 7);
+    eq(M.borrowedChords(s, 'triad').some(c => c.sourceMode === 'Minor' && c.degree === 7), true, 'offered in C Major');
+    eq(`${M.chordName(ch, s)} – ${M.romanNumeral(ch, s)} – ${M.chordNoteNames(ch, s).join(' ')}`, 'B♭ – ♭VII – B♭ D F', 'readout');
+    const inKey = M.placeChord(ch, s, M.buildGrid(s));
+    eq(inKey.missing.map(m => m.name), ['B♭'], 'missing notes');
+    eq(M.missingMessage(inKey.missing), 'Switch Push to Chromatic – 1 note not in scale (B♭)', 'banner');
+    eq(inKey.primary.pads.length, 2, 'In Key lights the 2 playable notes');
+    eq(inKey.bassMissing, true, 'bass is the missing note');
+    const sc = S({ mode: 'chromatic' }), gc = M.buildGrid(sc);   // what "Show in Chromatic" does
+    const chrom = M.placeChord(ch, sc, gc);
+    eq(chrom.missing, [], 'nothing missing in Chromatic');
+    eq(chrom.primary.pads.map(i => gc[i].midi - gc[chrom.primary.bass].midi), [0, 4, 7], 'full major triad shape');
+    eq(gc[chrom.primary.bass].pc, 10, 'bass pad is B♭');
+  });
+
+  test('AT7 A Minor · V comes from Harmonic Minor and is E major with G♯', () => {
+    const s = S({ key: 'A', scale: 'Minor' });
+    const v = M.borrowedChords(s, 'triad').find(c => M.romanNumeral(c, s) === 'V');
+    eq(v && v.sourceMode, 'Harmonic Minor', 'source mode');
+    eq(M.chordName(v, s), 'E', 'name');
+    eq(M.chordNoteNames(v, s), ['E','G♯','B'], 'notes');
+    eq(M.missingNotes(v, s).map(m => m.name), ['G♯'], 'G♯ not in A Minor');
+  });
+
+  test('Families: scales with a major 3rd get the major list', () => {
+    eq(['Major','Lydian','Mixolydian','Harmonic Major','Phrygian Dominant'].map(M.scaleFamily), Array(5).fill('major'), 'major');
+    eq(['Minor','Dorian','Phrygian','Locrian','Harmonic Minor','Melodic Minor'].map(M.scaleFamily), Array(6).fill('minor'), 'minor');
+  });
+
+  test('C Major borrowed list: numerals, names and spelling', () => {
+    const s = S({}), list = M.borrowedChords(s, 'triad');
+    eq(list.map(c => M.romanNumeral(c, s)), ['iv','♭III','♭VI','♭VII','v','ii°','♭II','II'], 'numerals');
+    eq(list.map(c => M.chordName(c, s)), ['Fm','E♭','A♭','B♭','Gm','Ddim','D♭','D'], 'names');
+    eq(M.chordNoteNames(list[0], s), ['F','A♭','C'], 'iv spelt with A♭');
+    eq(M.chordNoteNames(list[7], s), ['D','F♯','A'], 'II spelt with F♯');
+  });
+
+  test('A Minor borrowed list numerals (ii, not II, from Dorian)', () => {
+    const s = S({ key: 'A', scale: 'Minor' });
+    eq(M.borrowedChords(s, 'triad').map(c => M.romanNumeral(c, s)), ['IV','V','I','ii','♭II','vi°'], 'numerals');
+  });
+
+  test('Borrowed chords that match a diatonic chord are left out', () => {
+    const s = S({ scale: 'Mixolydian' });
+    const nums = M.borrowedChords(s, 'triad').map(c => M.romanNumeral(c, s));
+    eq(nums.includes('♭VII') || nums.includes('v'), false, '♭VII and v are diatonic in Mixolydian');
+    eq(M.borrowedChords(S({ key: 'A', scale: 'Harmonic Minor' }), 'triad').some(c => c.sourceMode === 'Harmonic Minor'), false, 'V is diatonic in Harmonic Minor');
+  });
+
+  test('Borrowed chords take the chosen type and inversion', () => {
+    const s = S({});
+    eq(M.chordName(B('Minor', 4, { type: '7' }), s), 'Fm7', 'iv7');
+    eq(M.romanNumeral(B('Minor', 4, { type: '7' }), s), 'iv7', 'iv7 numeral');
+    eq(M.chordName(B('Minor', 7, { inversion: 1 }), s), 'B♭/D', 'B♭/D');
+  });
+
+  test('Diatonic chords are never missing notes; plurals in the banner', () => {
+    for (const scale of M.SCALES.map(x => x.name)) for (let d = 1; d <= 7; d++)
+      eq(M.missingNotes(C({ degree: d, type: 'add9' }), S({ key: 'G♭', scale })).length, 0, `${scale} ${d}`);
+    const m = M.missingNotes(B('Minor', 6, { type: '7' }), S({}));
+    eq(M.missingMessage(m), 'Switch Push to Chromatic – 2 notes not in scale (A♭, E♭)', 'two notes');
+  });
+
+  test('Anchor still works when the bass is missing (taps go to the lowest playable note)', () => {
+    const s = S({}), g = M.buildGrid(s), ch = B('Minor', 7);
+    const first = M.placeChord(ch, s, g);
+    eq(first.anchorPc, 2, 'anchor on D');
+    const other = first.others[0].bass;
+    eq(M.placeChord(ch, s, g, other).primary.bass, other, 're-anchored');
+  });
+
   return results;
 }
 
@@ -913,7 +1106,7 @@ const UI = (() => {
 
   function computeShape() {
     grid = Music.buildGrid(settings);
-    shape = chord ? Music.placeShape(Music.chordPitches(chord, settings), grid, anchor) : null;
+    shape = chord ? Music.placeChord(chord, settings, grid, anchor) : null;
   }
 
   function renderGrid() {
@@ -921,8 +1114,10 @@ const UI = (() => {
     el.classList.toggle('labels-off', settings.labels !== 'all');
     const primary = new Set(shape && shape.primary ? shape.primary.pads : []);
     const ghosts = new Set(shape ? shape.others.flatMap(sh => sh.pads) : []);
-    const ghostBasses = new Set(shape ? shape.others.map(sh => sh.bass) : []);
-    const bass = shape && shape.primary ? shape.primary.bass : -1;
+    // No bass ring when the real bass note is missing (In Key, out of scale).
+    const ringed = shape && !shape.bassMissing;
+    const ghostBasses = new Set(ringed ? shape.others.map(sh => sh.bass) : []);
+    const bass = ringed && shape.primary ? shape.primary.bass : -1;
     const flats = chord ? Music.chordSpellsFlat(chord, settings) : null;
 
     const frag = document.createDocumentFragment();
@@ -957,11 +1152,12 @@ const UI = (() => {
     const name = Music.chordName(chord, settings);
     const num = Music.romanNumeral(chord, settings);
     const notes = Music.chordNoteNames(chord, settings).join(' ');
+    const src = chord.source === 'borrowed' ? ` <span class="src">· from ${settings.key} ${chord.sourceMode}</span>` : '';
     let small = '';
-    if (!shape.primary) { small = 'Doesn’t fit on the grid at this octave'; el.classList.add('warn'); }
+    if (!shape.primary && !shape.missing.length) { small = 'Doesn’t fit on the grid at this octave'; el.classList.add('warn'); }
     else if (shape.anchorMissed) { small = 'Doesn’t fit from that pad'; el.classList.add('warn'); }
     el.innerHTML = `<div class="big">${name} <span class="sep">–</span> <span class="num">${num}</span></div>
-      <div class="notes">${notes}</div>${small ? `<div class="small">${small}</div>` : ''}`;
+      <div class="notes">${notes}${src}</div>${small ? `<div class="small">${small}</div>` : ''}`;
   }
 
   function renderPadInfo() {
@@ -981,6 +1177,26 @@ const UI = (() => {
         <span class="n">${Music.romanNumeral(ch, settings)}</span>
         <span class="c">${Music.chordName(ch, settings)}</span></button>`;
     }).join('');
+  }
+
+  function renderBorrowed() {
+    const type = chord ? chord.type : 'triad';
+    const list = Music.borrowedChords(settings, type);
+    $('borrowed').innerHTML = `<span class="tag">Borrowed</span>` + list.map(ch => {
+      const on = chord && chord.source === 'borrowed' && chord.sourceMode === ch.sourceMode && chord.degree === ch.degree;
+      const warn = settings.mode === 'inKey' && Music.missingNotes(ch, settings).length > 0;
+      return `<button class="chord-btn" data-mode="${ch.sourceMode}" data-degree="${ch.degree}" aria-pressed="${!!on}"
+        title="From ${settings.key} ${ch.sourceMode}">
+        ${warn ? '<span class="w" aria-label="Not playable in In Key">⚠</span>' : ''}
+        <span class="n">${Music.romanNumeral(ch, settings)}</span>
+        <span class="c">${Music.chordName(ch, settings)}</span></button>`;
+    }).join('');
+  }
+
+  function renderMissing() {
+    const m = shape ? shape.missing : [];
+    $('missing').hidden = !m.length;
+    $('missingText').textContent = m.length ? Music.missingMessage(m) : '';
   }
 
   function renderTypes() {
@@ -1003,7 +1219,7 @@ const UI = (() => {
     $('scale').value = settings.scale;
     computeShape();
     renderSegments(); renderSummary(); renderNotice();
-    renderGrid(); renderReadout(); renderPadInfo(); renderDiatonic(); renderTypes();
+    renderGrid(); renderReadout(); renderMissing(); renderPadInfo(); renderDiatonic(); renderBorrowed(); renderTypes();
   }
 
   function flash(i) {
@@ -1019,10 +1235,7 @@ const UI = (() => {
     lastTap = i;
     // Tapping a pad with the bass pitch class anchors the shape there.
     // Any other pad only plays its note (audio arrives in stage 4).
-    if (chord) {
-      const bassPc = ((Music.chordPitches(chord, settings)[0] % 12) + 12) % 12;
-      if (p.pc === bassPc) { anchor = i; computeShape(); renderGrid(); renderReadout(); }
-    }
+    if (shape && p.pc === shape.anchorPc) { anchor = i; computeShape(); renderGrid(); renderReadout(); }
     renderPadInfo();
     flash(i);
   }
@@ -1053,6 +1266,16 @@ const UI = (() => {
       if (chord && chord.source === 'diatonic' && chord.degree === d) setChord(null);
       else setChord({ source: 'diatonic', degree: d, type: chord ? chord.type : 'triad', inversion: chord ? chord.inversion : 0 });
     });
+
+    $('borrowed').addEventListener('click', e => {
+      const b = e.target.closest('[data-degree]');
+      if (!b) return;
+      const sourceMode = b.dataset.mode, d = +b.dataset.degree;
+      if (chord && chord.source === 'borrowed' && chord.sourceMode === sourceMode && chord.degree === d) setChord(null);
+      else setChord({ source: 'borrowed', sourceMode, degree: d, type: chord ? chord.type : 'triad', inversion: chord ? chord.inversion : 0 });
+    });
+
+    $('toChromatic').addEventListener('click', () => setSetting('mode', 'chromatic'));
 
     $('types').addEventListener('click', e => {
       const b = e.target.closest('[data-type]');
