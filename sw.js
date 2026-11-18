@@ -2,7 +2,7 @@
    Bump VERSION whenever any cached file changes, or phones will keep the
    old copy. The new worker then installs in the background, takes over,
    and the page offers a reload. */
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = `pad-shapes-${VERSION}`;
 const ASSETS = [
   './',
@@ -12,6 +12,8 @@ const ASSETS = [
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png',
+  './fonts/instrument-sans-latin.woff2',
+  './fonts/noto-music-accidentals.woff2',
 ];
 
 self.addEventListener('install', event => {
